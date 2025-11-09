@@ -3,6 +3,8 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from firebase_admin import firestore
+from openai import OpenAI  
+import numpy as np  
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
