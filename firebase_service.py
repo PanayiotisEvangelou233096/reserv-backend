@@ -1,15 +1,22 @@
-import os
-import json
+"""
+Firebase Firestore Service - Restaurant Planner v2
+Handles all database operations according to the design document
+"""
 import firebase_admin
 from firebase_admin import credentials, firestore
+from config import Config
 import logging
-
-logger = logging.getLogger(__name__)
+import os
+from datetime import datetime
+import json
 
 class FirebaseService:
+    """Service class for Firebase Firestore operations - Restaurant Planner v2"""
+    
     _instance = None
     
     def __new__(cls):
+        """Singleton pattern to ensure only one Firebase instance"""
         if cls._instance is None:
             cls._instance = super(FirebaseService, cls).__new__(cls)
             cls._instance._initialize()
@@ -18,27 +25,108 @@ class FirebaseService:
     def _initialize(self):
         """Initialize Firebase Admin SDK"""
         try:
-            # Try to get credentials from environment variable first (for Railway/production)
-            creds_json = os.getenv('FIREBASE_CREDENTIALS_JSON')
-            
-            if creds_json:
-                logger.info("Loading Firebase credentials from environment variable")
-                cred = credentials.Certificate(json.loads(creds_json))
-            else:
-                # Fallback to file (for local development)
-                creds_path = os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json')
-                logger.info(f"Loading Firebase credentials from file: {creds_path}")
-                cred = credentials.Certificate(creds_path)
-            
+            # Check if Firebase is already initialized
             if not firebase_admin._apps:
+                # Try to get credentials from environment variable first (Railway/production)
+                firebase_creds_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+                
+                if firebase_creds_json_str:
+                    logger.info("Loading Firebase credentials from environment variable")
+                    # Parse the JSON string and create credentials
+                    creds_dict = json.loads(firebase_creds_json_str)
+                    cred = credentials.Certificate(creds_dict)
+                else:
+                    # Fallback to file (local development)
+                    logger.info("Loading Firebase credentials from file")
+                    cred_path = Config.FIREBASE_CREDENTIALS_PATH
+                    if not os.path.exists(cred_path):
+                        raise FileNotFoundError(f"Firebase credentials file not found: {cred_path}")
+                    cred = credentials.Certificate(cred_path)
+                
                 firebase_admin.initialize_app(cred)
+                logger.info("Firebase initialized successfully")
             
             self.db = firestore.client()
-            logger.info("Firebase initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize Firebase: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
+        
+logger = logging.getLogger(__name__)
+
+class FirebaseService:
+    """Service class for Firebase Firestore operations - Restaurant Planner v2"""
+    
+    _instance = None
+    
+    def __new__(cls):
+        """Singleton pattern to ensure only one Firebase instance"""
+        if cls._instance is None:
+            cls._instance = super(FirebaseService, cls).__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
+    
+    def _initialize(self):
+        """Initialize Firebase Admin SDK"""
+        try:
+            # Check if Firebase is already initialized
+            if not firebase_admin._apps:
+                # Try to get credentials from environment variable first (Railway/production)
+                firebase_creds_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+                
+                if firebase_creds_json_str:
+                    logger.info("Loading Firebase credentials from environment variable")
+                    # Parse the JSON string and create credentials
+                    creds_dict = json.loads(firebase_creds_json_str)
+                    cred = credentials.Certificate(creds_dict)
+                else:
+                    # Fallback to file (local development)
+                    logger.info("Loading Firebase credentials from file")
+                    cred_path = Config.FIREBASE_CREDENTIALS_PATH
+                    if not os.path.exists(cred_path):
+                        raise FileNotFoundError(f"Firebase credentials file not found: {cred_path}")
+                    cred = credentials.Certificate(cred_path)
+                
+                firebase_admin.initialize_app(cred)
+                logger.info("Firebase initialized successfully")
+            
+            self.db = firestore.client()
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Firebase: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+    
+    def get_all_restaurants(self):
+        """Fetch all restaurants from Firestore."""
+        restaurants = []
+        docs = self.db.collection('restaurants').stream()
+        for doc in docs:
+            restaurant = doc.to_dict()
+            restaurant['id'] = doc.id
+            restaurants.append(restaurant)
+        return restaurants
+    
+    def get_restaurant_by_location_id(self, location_id):
+        """Get restaurant by location_id"""
+        # Try to get by document ID first (if location_id is used as doc ID)
+        doc = self.db.collection('restaurants').document(location_id).get()
+        if doc.exists:
+            restaurant = doc.to_dict()
+            restaurant['id'] = doc.id
+            return restaurant
+        
+        # If not found by doc ID, search by location_id field
+        docs = self.db.collection('restaurants').where('location_id', '==', location_id).limit(1).stream()
+        for doc in docs:
+            restaurant = doc.to_dict()
+            restaurant['id'] = doc.id
+            return restaurant
+        
+        return None
     
     # ==================== USER MANAGEMENT ====================
     

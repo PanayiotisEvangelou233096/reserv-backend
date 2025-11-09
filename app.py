@@ -16,7 +16,6 @@ from routes.review_routes import review_bp
 from routes.outbound_call_routes import outbound_call_bp
 from routes.restaurant_routes import restaurant_bp
 import logging
-import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -86,5 +85,5 @@ def create_app():
 
 if __name__ == '__main__':
     app = create_app()
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0', port=5000)
+

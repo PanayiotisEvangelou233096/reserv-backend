@@ -1,37 +1,12 @@
 """
 Outbound Call Routes - API endpoints for automated restaurant calls
 """
-import logging
-import os
-from typing import Any, Dict, List
-
 from flask import Blueprint, request, jsonify, current_app
-
 from services.outbound_call_service import OutboundCallService
+import logging
 
 logger = logging.getLogger(__name__)
 outbound_call_bp = Blueprint('outbound_calls', __name__)
-
-
-def _inject_call_credentials(payload: Dict[str, Any]) -> None:
-    credentials = {
-        "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY"),
-        "elevenlabs_agent_id": os.getenv("ELEVENLABS_AGENT_ID"),
-        "elevenlabs_phone_number_id": os.getenv("ELEVENLABS_PHONE_NUMBER_ID"),
-        "twilio_account_sid": os.getenv("TWILIO_ACCOUNT_SID"),
-        "twilio_auth_token": os.getenv("TWILIO_AUTH_TOKEN"),
-        "twilio_sms_from": os.getenv("TWILIO_SMS_FROM"),
-        "twilio_messaging_service_sid": os.getenv("TWILIO_MESSAGING_SERVICE_SID"),
-    }
-
-    for key, value in credentials.items():
-        if value and key not in payload:
-            payload[key] = value
-
-    sms_from = credentials.get("twilio_sms_from")
-    if sms_from:
-        payload.setdefault("notification_from_number", sms_from)
-        payload.setdefault("from_number", sms_from)
 
 
 @outbound_call_bp.route('/events/<event_id>/call-restaurants', methods=['POST'])
@@ -81,14 +56,6 @@ def call_restaurants_for_event(event_id):
 
         # Get max calls
         max_calls = data.get('max_calls', 3)
-        candidate_restaurants: List[Dict[str, Any]] = (
-            recommendations[:max_calls]
-            if isinstance(max_calls, int)
-            else recommendations
-        )
-        booking_details.setdefault('candidate_restaurants', candidate_restaurants)
-        booking_details.setdefault('restaurants', candidate_restaurants)
-        _inject_call_credentials(booking_details)
 
         # Make calls to top restaurants
         logger.info(f"Calling top {max_calls} restaurants for event {event_id}")
@@ -193,9 +160,6 @@ def call_specific_restaurant(event_id):
         booking_details.setdefault('party_size', party_size)
         booking_details.setdefault('booking_date', event.get('preferred_date'))
         booking_details.setdefault('booking_time', event.get('preferred_time_slots', ['19:00'])[0])
-        booking_details.setdefault('candidate_restaurants', [restaurant])
-        booking_details.setdefault('restaurants', [restaurant])
-        _inject_call_credentials(booking_details)
 
         # Prepare call data
         call_data = call_service.prepare_call_data_from_booking(
@@ -203,11 +167,6 @@ def call_specific_restaurant(event_id):
             event,
             booking_details
         )
-        _inject_call_credentials(call_data)
-        if booking_details.get('candidate_restaurants'):
-            call_data.setdefault('candidate_restaurants', booking_details['candidate_restaurants'])
-        if booking_details.get('restaurants'):
-            call_data.setdefault('restaurants', booking_details['restaurants'])
 
         # Make the call
         result = call_service.make_reservation_call(call_data)
@@ -245,7 +204,10 @@ def call_specific_restaurant(event_id):
 @outbound_call_bp.route('/calls/<call_id>/outcome', methods=['GET'])
 def get_call_outcome(call_id):
     """
-    Get the outcome of a call
+    Get the outcome of a call and optionally send SMS confirmation
+    
+    Query parameters:
+    - send_sms: Set to 'true' to send SMS confirmation (default: true)
     """
     try:
         firebase_service = current_app.get_firebase_service()
@@ -260,8 +222,30 @@ def get_call_outcome(call_id):
         if not conversation_id:
             return jsonify({'error': 'No conversation ID found'}), 400
 
+        # Check if SMS should be sent
+        send_sms = request.args.get('send_sms', 'true').lower() == 'true'
+
+        # Prepare notification context from call record
+        event_id = call_record.get('event_id')
+        notification_context = None
+        if event_id and send_sms:
+            event = firebase_service.get_event(event_id)
+            if event:
+                notification_context = {
+                    'phone': event.get('organizer_phone'),
+                    'restaurant_name': call_record.get('restaurant_name'),
+                    'location': 'See confirmation details',
+                    'date': event.get('preferred_date'),
+                    'time': event.get('preferred_time_slots', ['19:00'])[0],
+                    'from_number': None
+                }
+
         # Get outcome from ElevenLabs
-        outcome = call_service.get_conversation_outcome(conversation_id)
+        outcome = call_service.get_conversation_outcome(
+            conversation_id,
+            notification_context=notification_context,
+            initiate_sms_sequence=send_sms
+        )
 
         # Update call record with outcome
         update_data = {
@@ -271,6 +255,9 @@ def get_call_outcome(call_id):
             'outcome_notes': outcome.get('notes'),
             'transcript': outcome.get('transcript'),
             'duration_seconds': outcome.get('duration_seconds'),
+            'sms_confirmation_sent': outcome.get('sms_confirmation_sent', False),
+            'sms_confirmation_sid': outcome.get('sms_confirmation_sid'),
+            'sms_error': outcome.get('sms_error'),
             'outcome_retrieved_at': outcome.get('timestamp')
         }
         firebase_service.update_call_record(call_id, update_data)
@@ -356,4 +343,144 @@ def elevenlabs_webhook():
 
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@outbound_call_bp.route('/sms/send', methods=['POST'])
+def send_sms_confirmation():
+    """
+    Send an SMS confirmation for a reservation
+    
+    Request body:
+    {
+        "phone": "+15555551234",
+        "restaurant_name": "The Great Restaurant",
+        "location": "123 Main St, City, State",
+        "date": "2025-11-15",
+        "time": "19:00",
+        "from_number": "+15555550000",  // Optional
+        "reservation_confirmed": true,  // Optional, default: true
+        "notes": "Window seat confirmed"  // Optional
+    }
+    """
+    try:
+        call_service = OutboundCallService()
+        data = request.get_json()
+
+        # Validate required fields
+        required_fields = ['phone', 'restaurant_name', 'location', 'date', 'time']
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            return jsonify({
+                'error': f'Missing required fields: {", ".join(missing_fields)}'
+            }), 400
+
+        # Send SMS
+        result = call_service.send_sms_for_reservation(
+            phone=data['phone'],
+            restaurant_name=data['restaurant_name'],
+            location=data['location'],
+            date=data['date'],
+            reservation_time=data['time'],
+            from_number=data.get('from_number'),
+            reservation_confirmed=data.get('reservation_confirmed', True),
+            notes=data.get('notes')
+        )
+
+        if result['success']:
+            return jsonify({
+                'message': 'SMS sent successfully',
+                'sms_sid': result['sms_sid'],
+                'timestamp': result['timestamp']
+            }), 200
+        else:
+            return jsonify({
+                'error': result['error'],
+                'timestamp': result['timestamp']
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error sending SMS: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@outbound_call_bp.route('/events/<event_id>/send-confirmation-sms', methods=['POST'])
+def send_event_confirmation_sms(event_id):
+    """
+    Send confirmation SMS for an event's confirmed reservation
+    
+    Request body (optional):
+    {
+        "call_id": "call_123",  // Optional: specify which call to send confirmation for
+        "phone": "+15555551234",  // Optional: override phone number
+        "notes": "Special note"  // Optional: additional notes
+    }
+    """
+    try:
+        firebase_service = current_app.get_firebase_service()
+        call_service = OutboundCallService()
+        data = request.get_json() or {}
+
+        # Get event
+        event = firebase_service.get_event(event_id)
+        if not event:
+            return jsonify({'error': 'Event not found'}), 404
+
+        # Get call record if specified, or find the most recent successful call
+        call_record = None
+        if 'call_id' in data:
+            call_record = firebase_service.get_call_record(data['call_id'])
+            if not call_record or call_record.get('event_id') != event_id:
+                return jsonify({'error': 'Call record not found for this event'}), 404
+        else:
+            # Get all calls for the event
+            calls = firebase_service.get_event_calls(event_id)
+            # Find the first successful and accepted reservation
+            for call in calls:
+                if call.get('reservation_accepted'):
+                    call_record = call
+                    break
+            
+            if not call_record:
+                return jsonify({'error': 'No confirmed reservation found for this event'}), 404
+
+        # Prepare SMS data
+        phone = data.get('phone') or event.get('organizer_phone')
+        if not phone:
+            return jsonify({'error': 'No phone number available'}), 400
+
+        # Send SMS
+        result = call_service.send_sms_for_reservation(
+            phone=phone,
+            restaurant_name=call_record.get('restaurant_name', 'Restaurant'),
+            location='See confirmation details',
+            date=event.get('preferred_date', ''),
+            reservation_time=event.get('preferred_time_slots', ['19:00'])[0],
+            reservation_confirmed=True,
+            notes=data.get('notes')
+        )
+
+        if result['success']:
+            # Update call record with SMS info
+            firebase_service.update_call_record(call_record['id'], {
+                'sms_confirmation_sent': True,
+                'sms_confirmation_sid': result['sms_sid'],
+                'sms_sent_at': result['timestamp']
+            })
+
+            return jsonify({
+                'message': 'Confirmation SMS sent successfully',
+                'event_id': event_id,
+                'call_id': call_record['id'],
+                'sms_sid': result['sms_sid'],
+                'timestamp': result['timestamp']
+            }), 200
+        else:
+            return jsonify({
+                'error': result['error'],
+                'timestamp': result['timestamp']
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error sending event confirmation SMS: {str(e)}")
         return jsonify({'error': str(e)}), 500

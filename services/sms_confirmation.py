@@ -167,7 +167,7 @@ def build_message_body(
         calendar_link = build_calendar_link(restaurant, location, start, end)
         short_calendar_link = shorten_url(calendar_link)
         message = (
-            f"Great news! Your Reserv-booking at {restaurant} for is confirmed!\n"
+            f"Great news! Your Reserv-booking at {restaurant} is confirmed!\n"
             f"{schedule}\n"
             f"{location_line}\n\n"
             f"Ready to go? Add it to your calendar: {short_calendar_link}\n\n"

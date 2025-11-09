@@ -2,18 +2,12 @@
 import os
 from typing import Dict
 
-import numpy as np
 from dotenv import load_dotenv
 from firebase_admin import firestore
 from langchain_openai import ChatOpenAI
-from openai import OpenAI
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-EMBEDDING_MODEL = os.getenv(
-    "OPENAI_EMBEDDING_MODEL",
-    "text-embedding-3-small",
-)
 
 # Disable LangSmith tracing to avoid 403 errors
 # Enable only when a valid LANGCHAIN_API_KEY is configured.
@@ -24,53 +18,6 @@ os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 # Cache LLM instances to avoid recreation
 _llm_cache: Dict[tuple[str, float, int], ChatOpenAI] = {}
-_embedding_client: OpenAI | None = None
-_embedding_cache: Dict[str, np.ndarray] = {}
-
-
-def _get_embedding_client() -> OpenAI:
-    if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-    global _embedding_client
-    if _embedding_client is None:
-        _embedding_client = OpenAI(api_key=OPENAI_API_KEY)
-    return _embedding_client
-
-
-def _text_embedding(text: str) -> np.ndarray:
-    """Return embedding for text, cached to avoid repeated API calls."""
-    normalized = text.strip().lower()
-    if not normalized:
-        return np.array([], dtype=np.float32)
-
-    if normalized in _embedding_cache:
-        return _embedding_cache[normalized]
-
-    client = _get_embedding_client()
-    try:
-        response = client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=normalized,
-        )
-    except Exception:
-        # On failure cache empty vector to avoid repeated retries
-        _embedding_cache[normalized] = np.array([], dtype=np.float32)
-        return _embedding_cache[normalized]
-
-    embedding = np.array(response.data[0].embedding, dtype=np.float32)
-    _embedding_cache[normalized] = embedding
-    return embedding
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    if a.size == 0 or b.size == 0:
-        return 0.0
-
-    denom = np.linalg.norm(a) * np.linalg.norm(b)
-    if denom == 0:
-        return 0.0
-    return float(np.dot(a, b) / denom)
 
 
 def get_llm(
@@ -126,7 +73,7 @@ def score_restaurant(
         score += 2.0
         reasons.append(f"Location matches {location_pref}")
 
-    # Cuisine match via embeddings (with keyword fallback)
+    # Cuisine match via keyword matching
     restaurant_cuisines = restaurant.get("cuisine", []) or []
     parsed_cuisines = parsed_input.get("cuisine_preferences", []) or []
     if (
@@ -134,32 +81,16 @@ def score_restaurant(
         and parsed_cuisines
         and "Any" not in parsed_cuisines
     ):
-        restaurant_text = ", ".join(restaurant_cuisines)
-        preference_text = ", ".join(parsed_cuisines)
-
-        rest_embedding = _text_embedding(f"restaurant:{restaurant_text}")
-        pref_embedding = _text_embedding(f"user:{preference_text}")
-        cuisine_similarity = _cosine_similarity(rest_embedding, pref_embedding)
-
-        if cuisine_similarity > 0:
-            # Weight similarity to keep overall score within a comparable range
-            score += cuisine_similarity * 3.0
+        # Simple keyword-based matching
+        matching_cuisines = (
+            set(c.lower() for c in restaurant_cuisines)
+            & set(c.lower() for c in parsed_cuisines)
+        )
+        if matching_cuisines:
+            score += len(matching_cuisines) * 2.0  # Weight cuisine matches
             reasons.append(
-                "Cuisine similarity "
-                f"{cuisine_similarity:.2f} for preferences {preference_text}"
+                f"Matches cuisines: {', '.join(matching_cuisines)}"
             )
-        else:
-            # Fallback to keyword overlap
-            matching_cuisines = (
-                set(c.lower() for c in restaurant_cuisines)
-                & set(c.lower() for c in parsed_cuisines)
-            )
-            if matching_cuisines:
-                score += len(matching_cuisines)
-                reasons.append(
-                    "Matches cuisines: "
-                    f"{', '.join(matching_cuisines)}"
-                )
 
     # Budget match (using price_level as proxy)
     price_levels = {"$": 25, "$$": 50, "$$$": 100, "$$$$": 200}

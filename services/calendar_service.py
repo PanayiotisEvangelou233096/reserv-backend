@@ -8,7 +8,6 @@ from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -19,30 +18,15 @@ class CalendarService:
     
     def __init__(self):
         try:
-            # Try to get credentials from environment variable first (for Railway/production)
-            firebase_creds_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
-            
-            if firebase_creds_json_str:
-                logger.info("Loading Google Calendar credentials from environment variable")
-                # Parse the JSON string and create credentials
-                creds_dict = json.loads(firebase_creds_json_str)
-                credentials = service_account.Credentials.from_service_account_info(
-                    creds_dict, scopes=SCOPES
-                )
-            else:
-                # Fallback to file (for local development)
-                credentials_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-credentials.json')
-                logger.info(f"Loading Google Calendar credentials from file: {credentials_path}")
-                credentials = service_account.Credentials.from_service_account_file(
-                    credentials_path, scopes=SCOPES
-                )
-            
+            # Use service account credentials from the JSON file
+            credentials_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-credentials.json')
+            credentials = service_account.Credentials.from_service_account_file(
+                credentials_path, scopes=SCOPES
+            )
             self.service = build('calendar', 'v3', credentials=credentials)
             logger.info("Successfully initialized Google Calendar service")
         except Exception as e:
             logger.error(f"Error initializing Google Calendar service: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
             self.service = None
     
     def _parse_booking_datetime(self, booking_date, booking_time):
@@ -178,19 +162,19 @@ class CalendarService:
             
             # Generate iCal content
             ical_content = f"""BEGIN:VCALENDAR
-            VERSION:2.0
-            PRODID:-//Restaurant Planner//EN
-            BEGIN:VEVENT
-            UID:{booking.get('id', 'booking')}@restaurant-planner
-            DTSTAMP:{created_ical}
-            DTSTART:{start_ical}
-            DTEND:{end_ical}
-            SUMMARY:Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}
-            DESCRIPTION:Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}
-            LOCATION:{booking.get('restaurant_address', '')}
-            STATUS:CONFIRMED
-            END:VEVENT
-            END:VCALENDAR"""
+VERSION:2.0
+PRODID:-//Restaurant Planner//EN
+BEGIN:VEVENT
+UID:{booking.get('id', 'booking')}@restaurant-planner
+DTSTAMP:{created_ical}
+DTSTART:{start_ical}
+DTEND:{end_ical}
+SUMMARY:Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}
+DESCRIPTION:Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}
+LOCATION:{booking.get('restaurant_address', '')}
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR"""
             
             return ical_content
             
@@ -230,20 +214,14 @@ class CalendarService:
             
             # Build Google Calendar URL
             title = f"Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}"
-            
-            party_size = booking.get('party_size', 2)
-            restaurant_name = booking.get('restaurant_name', '')
-            restaurant_address = booking.get('restaurant_address', '')
-            
-            # Use %0A for newlines in URL (URL-encoded newline)
-            details = f"Reservation for {party_size} guests%0ARestaurant: {restaurant_name}%0AAddress: {restaurant_address}"
+            details = f"Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}"
             location = booking.get('restaurant_address', '')
             
             google_cal_url = (
                 f"https://calendar.google.com/calendar/render?action=TEMPLATE"
                 f"&text={title.replace(' ', '+')}"
                 f"&dates={start_google}/{end_google}"
-                f"&details={details.replace(' ', '+')}"
+                f"&details={details.replace(' ', '+').replace('\\n', '%0A')}"
                 f"&location={location.replace(' ', '+')}"
             )
             
@@ -252,6 +230,4 @@ class CalendarService:
         except Exception as e:
             logger.error(f"Error generating Google Calendar link: {str(e)}")
             raise
-
-
 

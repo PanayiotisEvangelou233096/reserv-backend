@@ -30,13 +30,15 @@ def submit_response(event_id):
         user = firebase_service.get_user(respondent_phone)
         
         if not user:
-            # Create new user with default preferences
+            # New user - create with onboarding data
+            if 'dietary_restrictions' not in data or 'alcohol_preference' not in data:
+                return jsonify({'error': 'New users must provide dietary_restrictions and alcohol_preference'}), 400
             user_data = {
                 'phone_number': respondent_phone,
-                'dietary_restrictions': [],  # Default empty restrictions
-                'alcohol_preference': 'no-preference',  # Default no preference
-                'push_notifications_enabled': True,
-                'email_notifications_enabled': True
+                'dietary_restrictions': data.get('dietary_restrictions', []),
+                'alcohol_preference': data.get('alcohol_preference', 'no-preference'),
+                'push_notifications_enabled': data.get('push_notifications_enabled', True),
+                'email_notifications_enabled': data.get('email_notifications_enabled', True)
             }
             firebase_service.create_or_update_user(respondent_phone, user_data)
         
@@ -105,11 +107,7 @@ def submit_response(event_id):
                     logger.info(f"Event {event_id}: Initiating outbound calls to top restaurants...")
                     from services.outbound_call_service import OutboundCallService
 
-                    call_service = OutboundCallService(
-                        api_key=current_app.config['ELEVENLABS_API_KEY'],
-                        agent_id=current_app.config['ELEVENLABS_AGENT_ID'],
-                        agent_phone_number_id=current_app.config['ELEVENLABS_PHONE_NUMBER_ID']
-                    )
+                    call_service = OutboundCallService()
 
                     # Get confirmed attendees for party size
                     party_size = len(confirmed_attendees) + 1  # +1 for organizer

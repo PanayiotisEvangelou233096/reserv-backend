@@ -80,10 +80,10 @@ def book_restaurant(event_id):
             restaurant_address = ', '.join(parts) if parts else 'Address not available'
 
         # Get the phone number (use debug phone if enabled)
-        restaurant_phone = selected_restaurant.get('phone', '')
+        phone = selected_restaurant.get('phone', '')
         if Config.USE_DEBUG_PHONE:
-            restaurant_phone = Config.DEBUG_PHONE_NUMBER
-            logger.info(f"Using debug phone number: {restaurant_phone}")
+            phone = Config.DEBUG_PHONE_NUMBER
+            logger.info(f"Using debug phone number: {phone}")
 
         # Get location_id from restaurant - need to look it up from Firestore
         location_id = None
@@ -120,7 +120,7 @@ def book_restaurant(event_id):
             'recommendation_id': recommendations_doc.get('id'),
             'restaurant_name': selected_restaurant['restaurant_name'],
             'restaurant_address': restaurant_address,
-            'restaurant_phone': restaurant_phone,
+            'phone': phone,
             'restaurant_cuisine_type': selected_restaurant.get('cuisine_type', ''),
             'location_id': location_id,
             'booking_date': event['preferred_date'],

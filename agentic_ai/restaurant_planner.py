@@ -8,6 +8,19 @@ from .models import ParsedInput, Restaurant, RestaurantRecommendation
 from .utils import get_llm, get_restaurants_from_firestore, score_restaurant, filter_blacklisted_restaurants
 
 
+# Cache the LLM structured output wrapper to avoid recreating it on every call
+_cached_llm_structured = None
+
+def get_llm_structured():
+    """Get cached LLM with structured output - optimized for speed"""
+    global _cached_llm_structured
+    if _cached_llm_structured is None:
+        # Use gpt-4.1-nano model for accurate parsing
+        # Limit max_tokens to prevent excessive generation
+        _cached_llm_structured = get_llm(model="gpt-4.1-nano", temperature=0, max_tokens=1500).with_structured_output(ParsedInput)
+    return _cached_llm_structured
+
+
 class RestaurantPlannerState(TypedDict):
     """State for restaurant planning workflow"""
     input: Optional[str]  # Combined text input from all responses
@@ -32,42 +45,48 @@ def parse_input(state: RestaurantPlannerState) -> RestaurantPlannerState:
     if not combined_input:
         return state
     
-    # Use faster model (gpt-4o-mini) instead of reasoning model (gpt-5-nano)
-    # Limit max_tokens to prevent excessive generation (300 is enough for structured output)
-    llm = get_llm(model="gpt-4.1-nano", temperature=0, max_tokens=4000).with_structured_output(ParsedInput)
+    # Get current time directly (no tool invocation overhead)
+    now = datetime.now()
+    current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+    current_day = now.strftime("%A")
+    current_location = "Amsterdam"  # Default location
     
-    # Concise prompt to reduce input tokens and speed up processing
-    prompt = """Extract restaurant booking details:
-    - attendee_count: number of people
-    - location_preference: location/area
-    - time_preference: preferred time
-    - date: preferred date
-    - budget_min: minimum per person (or null)
-    - budget_max: maximum per person (or null)
-    - dietary_restrictions: all restrictions combined (or "")
-    - cuisine_preferences: list of cuisines
-
-    If budgets vary, use range covering all. If cuisines vary, include all."""
+    # Use cached LLM with structured output to parse the text
+    llm_structured = get_llm_structured()
     
-    parsed = llm.invoke([
-        SystemMessage(content=prompt),
-        HumanMessage(content=combined_input)
+    # Concise system prompt with clear instructions
+    system_prompt = """Extract restaurant booking details from combined attendee responses. Use current time to resolve relative dates and times. Use the current location to align the restaurant location preferences.
+    
+    CRITICAL INSTRUCTIONS:
+    - Count ALL attendees including the organizer
+    - Combine ALL dietary restrictions from ALL responses - missing any could cause serious health issues
+    - Include ALL cuisine preferences from ALL responses
+    - If budgets vary, use range covering all (lowest min, highest max)
+    - Resolve relative dates/times using current time context
+    - Align location preferences with current location context"""
+    
+    # Build concise prompt with current time context
+    prompt = f"Time: {current_time} ({current_day}), Location: {current_location}\n\nCombined attendee responses:\n{combined_input}"
+    
+    parsed = llm_structured.invoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=prompt)
     ])
     
     return {
         **state,
         "attendee_count": parsed.attendee_count,
-        "location_preference": parsed.location_preference,
-        "time_preference": parsed.time_preference,
-        "date": parsed.date,
+        "location_preference": parsed.location_preference or "Amsterdam",
+        "time_preference": parsed.time_preference or "evening",
+        "date": parsed.date or now.strftime("%Y-%m-%d"),
         "budget_min": parsed.budget_min or 0,
         "budget_max": parsed.budget_max or 1000,
         "dietary_restrictions": parsed.dietary_restrictions or "No restrictions",
         "cuisine_preferences": parsed.cuisine_preferences or ["Any"],
         "messages": state.get("messages", []) + [
             f"Parsed: {parsed.attendee_count} attendees, "
-            f"{parsed.location_preference}, {parsed.time_preference}, "
-            f"Budget: ${parsed.budget_min or 0}-${parsed.budget_max or 0}"
+            f"{parsed.location_preference or 'Amsterdam'}, {parsed.time_preference or 'evening'}, "
+            f"Budget: €{parsed.budget_min or 0}-€{parsed.budget_max or 1000}"
         ]
     }
 

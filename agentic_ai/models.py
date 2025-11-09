@@ -5,14 +5,37 @@ from typing import Optional, List
 
 class ParsedInput(BaseModel):
     """Parsed input from combined text - all responses in one"""
-    attendee_count: int = Field(description="Number of people attending")
-    location_preference: str = Field(description="Location preference")
-    time_preference: str = Field(description="Preferred time")
-    date: str = Field(description="Preferred date")
-    budget_min: Optional[float] = Field(default=None, description="Minimum budget per person")
-    budget_max: Optional[float] = Field(default=None, description="Maximum budget per person")
-    dietary_restrictions: str = Field(default="", description="Combined dietary restrictions")
-    cuisine_preferences: List[str] = Field(default_factory=list, description="List of preferred cuisines")
+    attendee_count: int = Field(
+        description="Total number of people attending the event. Count all attendees including the organizer."
+    )
+    location_preference: Optional[str] = Field(
+        default=None,
+        description="Preferred location or area for the restaurant (e.g., 'Amsterdam Zuid', 'downtown', 'near Central Station'). Align with current location context if mentioned."
+    )
+    time_preference: Optional[str] = Field(
+        default=None,
+        description="Preferred time for dining in HH:MM format (24-hour) or descriptive (e.g., 'evening', 'lunch', '19:00'). Use current time to resolve relative times like 'tonight', 'this evening'."
+    )
+    date: Optional[str] = Field(
+        default=None,
+        description="Preferred date in YYYY-MM-DD format. Resolve relative dates like 'today', 'tomorrow', 'next Monday' using current time context."
+    )
+    budget_min: Optional[float] = Field(
+        default=None,
+        description="Minimum budget per person in Euros. Extract from ranges or single values. If multiple budgets mentioned, use the lowest. None if no budget mentioned."
+    )
+    budget_max: Optional[float] = Field(
+        default=None,
+        description="Maximum budget per person in Euros. Extract from ranges or single values. If multiple budgets mentioned, use the highest. None if no budget mentioned."
+    )
+    dietary_restrictions: Optional[str] = Field(
+        default=None,
+        description="CRITICAL: ALL dietary restrictions, allergies, intolerances, religious requirements, and medical dietary needs from ALL attendees. MUST include: allergies (nuts, shellfish, dairy, eggs, soy, wheat, etc.), intolerances (lactose, gluten), religious (halal, kosher, vegetarian for religious reasons), medical (diabetes-friendly, low-sodium, etc.). Combine all restrictions from all responses. Format as comma-separated list. Missing any could cause serious health issues. Leave empty ONLY if absolutely nothing is mentioned."
+    )
+    cuisine_preferences: Optional[List[str]] = Field(
+        default=None,
+        description="List of ALL cuisine preferences from ALL attendees. General types only, not specific dishes (e.g., 'Italian', 'Japanese', 'Mediterranean', 'vegetarian options', 'spicy food'). Include all unique preferences mentioned across all responses. Empty list if none mentioned."
+    )
 
 
 class Restaurant(BaseModel):

@@ -34,7 +34,7 @@ class ParsedEventInfo(BaseModel):
     )
     number_of_attendees: Optional[int] = Field(
         default=None,
-        description="Number of attendees."
+        description="Number of attendees. Excluding the organizer."
     )
     cuisine_preferences: Optional[List[str]] = Field(
         default=None,
