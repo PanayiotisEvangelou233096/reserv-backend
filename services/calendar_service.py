@@ -178,19 +178,19 @@ class CalendarService:
             
             # Generate iCal content
             ical_content = f"""BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//Restaurant Planner//EN
-BEGIN:VEVENT
-UID:{booking.get('id', 'booking')}@restaurant-planner
-DTSTAMP:{created_ical}
-DTSTART:{start_ical}
-DTEND:{end_ical}
-SUMMARY:Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}
-DESCRIPTION:Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}
-LOCATION:{booking.get('restaurant_address', '')}
-STATUS:CONFIRMED
-END:VEVENT
-END:VCALENDAR"""
+            VERSION:2.0
+            PRODID:-//Restaurant Planner//EN
+            BEGIN:VEVENT
+            UID:{booking.get('id', 'booking')}@restaurant-planner
+            DTSTAMP:{created_ical}
+            DTSTART:{start_ical}
+            DTEND:{end_ical}
+            SUMMARY:Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}
+            DESCRIPTION:Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}
+            LOCATION:{booking.get('restaurant_address', '')}
+            STATUS:CONFIRMED
+            END:VEVENT
+            END:VCALENDAR"""
             
             return ical_content
             
@@ -230,14 +230,21 @@ END:VCALENDAR"""
             
             # Build Google Calendar URL
             title = f"Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}"
-            details = f"Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}"
+            
+            # ✅ FIX: Move newline outside f-string - use URL-encoded newline
+            party_size = booking.get('party_size', 2)
+            restaurant_name = booking.get('restaurant_name', '')
+            restaurant_address = booking.get('restaurant_address', '')
+            
+            # Use %0A for newlines in URL (URL-encoded newline)
+            details = f"Reservation for {party_size} guests%0ARestaurant: {restaurant_name}%0AAddress: {restaurant_address}"
             location = booking.get('restaurant_address', '')
             
             google_cal_url = (
                 f"https://calendar.google.com/calendar/render?action=TEMPLATE"
                 f"&text={title.replace(' ', '+')}"
                 f"&dates={start_google}/{end_google}"
-                f"&details={details.replace(' ', '+').replace('\\n', '%0A')}"
+                f"&details={details.replace(' ', '+')}"
                 f"&location={location.replace(' ', '+')}"
             )
             
