@@ -232,3 +232,79 @@ def get_aggregate_rating(restaurant_name):
     except Exception as e:
         logger.error(f"Error getting aggregate rating: {str(e)}")
         return jsonify({'error': str(e)}), 500
+
+@review_bp.route('/reviews/blacklist', methods=['POST'])
+def submit_blacklist_review():
+    """Submit a simple review that may blacklist a restaurant"""
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        if 'phone_number' not in data:
+            return jsonify({'error': 'phone_number is required'}), 400
+        if 'location_id' not in data:
+            return jsonify({'error': 'location_id is required'}), 400
+        if 'rating' not in data:
+            return jsonify({'error': 'rating is required'}), 400
+        
+        # Validate rating
+        rating = data['rating']
+        if not isinstance(rating, (int, float)) or rating < 1 or rating > 5:
+            return jsonify({'error': 'rating must be between 1 and 5'}), 400
+        
+        firebase_service = current_app.get_firebase_service()
+        
+        # Check if user exists, create if not
+        user = firebase_service.get_user(data['phone_number'])
+        if not user:
+            # Create a basic user entry
+            firebase_service.create_or_update_user(data['phone_number'], {})
+        
+        # Get restaurant by location_id
+        restaurant = firebase_service.get_restaurant_by_location_id(data['location_id'])
+        if not restaurant:
+            return jsonify({'error': 'Restaurant not found with the provided location_id'}), 404
+        
+        # Extract restaurant details
+        restaurant_name = restaurant.get('name', '')
+        restaurant_address = restaurant.get('address_obj', {})
+        if isinstance(restaurant_address, dict):
+            address_str = ', '.join([
+                restaurant_address.get('street', ''),
+                restaurant_address.get('city', ''),
+                restaurant_address.get('state', ''),
+                restaurant_address.get('country', '')
+            ]).strip(', ')
+        else:
+            address_str = str(restaurant_address) if restaurant_address else ''
+        
+        # If rating is 1 or 2, automatically blacklist
+        should_blacklist = rating <= 2
+        
+        result = {
+            'message': 'Review submitted successfully',
+            'phone_number': data['phone_number'],
+            'location_id': data['location_id'],
+            'rating': rating,
+            'blacklisted': should_blacklist
+        }
+        
+        if should_blacklist:
+            # Create blacklist entry
+            dislike_data = {
+                'user_phone': data['phone_number'],
+                'restaurant_name': restaurant_name,
+                'restaurant_address': address_str,
+                'location_id': data['location_id'],
+                'dislike_type': 'permanent',
+                'reason': 'low_rating',
+                'rating': rating
+            }
+            dislike = firebase_service.add_restaurant_dislike(dislike_data)
+            result['dislike'] = dislike
+        
+        return jsonify(result), 201
+        
+    except Exception as e:
+        logger.error(f"Error submitting blacklist review: {str(e)}")
+        return jsonify({'error': str(e)}), 500

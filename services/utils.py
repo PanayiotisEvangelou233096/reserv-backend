@@ -1,21 +1,31 @@
 """Utility functions for restaurant planner"""
 import os
+from typing import Dict
+
+import numpy as np
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from firebase_admin import firestore
+from langchain_openai import ChatOpenAI
+from openai import OpenAI
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+EMBEDDING_MODEL = os.getenv(
+    "OPENAI_EMBEDDING_MODEL",
+    "text-embedding-3-small",
+)
 
 # Disable LangSmith tracing to avoid 403 errors
-# If you want to enable it, make sure you have a valid LANGCHAIN_API_KEY in .env
+# Enable only when a valid LANGCHAIN_API_KEY is configured.
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 # os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
 # os.environ.setdefault("LANGCHAIN_PROJECT", "restaurant-planner")
 
 
 # Cache LLM instances to avoid recreation
-_llm_cache = {}
+_llm_cache: Dict[tuple[str, float, int], ChatOpenAI] = {}
+_embedding_client: OpenAI | None = None
+_embedding_cache: Dict[str, np.ndarray] = {}
 
 
 def _get_embedding_client() -> OpenAI:
@@ -24,10 +34,7 @@ def _get_embedding_client() -> OpenAI:
 
     global _embedding_client
     if _embedding_client is None:
-        _embedding_client = OpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url="https://fj7qg3jbr3.execute-api.eu-west-1.amazonaws.com/v1"
-        )
+        _embedding_client = OpenAI(api_key=OPENAI_API_KEY)
     return _embedding_client
 
 
@@ -67,14 +74,14 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def get_llm(
-    model: str = "gpt-4.1-mini",
+    model: str = "gpt-4o-mini",
     temperature: float = 0,
     max_tokens: int = 500,
 ) -> ChatOpenAI:
     """Get LLM client with standard configuration - optimized for speed"""
     if not OPENAI_API_KEY:
         raise ValueError("OPENAI_API_KEY environment variable is not set")
-    
+
     # Use cache key to reuse instances
     cache_key = (model, temperature, max_tokens)
     if cache_key not in _llm_cache:
@@ -82,9 +89,11 @@ def get_llm(
             model=model,
             temperature=temperature,
             api_key=OPENAI_API_KEY,
-            base_url="https://fj7qg3jbr3.execute-api.eu-west-1.amazonaws.com/v1",
+            base_url=(
+                "https://fj7qg3jbr3.execute-api.eu-west-1.amazonaws.com/v1"
+            ),
             max_tokens=max_tokens,
-            timeout=30  # Add timeout to prevent hanging
+            timeout=30,  # Add timeout to prevent hanging
         )
     return _llm_cache[cache_key]
 
@@ -98,63 +107,10 @@ def get_restaurants_from_firestore() -> list:
     return restaurants
 
 
-def filter_blacklisted_restaurants(restaurants: list, dislikes: list) -> list:
-    """Filter out blacklisted restaurants before scoring
-    Returns filtered list of restaurants"""
-    if not dislikes:
-        return restaurants
-    
-    # Build sets of blacklisted identifiers
-    blacklisted_location_ids = set()
-    blacklisted_restaurants = set()  # (name, address) tuples
-    
-    for dislike in dislikes:
-        if dislike.get('is_active', True):
-            # Check by location_id if available
-            if 'location_id' in dislike:
-                blacklisted_location_ids.add(dislike['location_id'])
-            # Also check by name and address (for backwards compatibility)
-            if 'restaurant_name' in dislike and 'restaurant_address' in dislike:
-                blacklisted_restaurants.add((
-                    dislike['restaurant_name'].lower().strip(),
-                    dislike['restaurant_address'].lower().strip()
-                ))
-    
-    # Filter restaurants
-    filtered = []
-    for restaurant in restaurants:
-        is_blacklisted = False
-        
-        # Check by location_id (primary method)
-        restaurant_location_id = restaurant.get('location_id')
-        if restaurant_location_id and restaurant_location_id in blacklisted_location_ids:
-            is_blacklisted = True
-        
-        # Check by name and address (fallback)
-        if not is_blacklisted:
-            restaurant_name = restaurant.get('name', '').lower().strip()
-            restaurant_address_obj = restaurant.get('address_obj', {})
-            if isinstance(restaurant_address_obj, dict):
-                address_parts = [
-                    restaurant_address_obj.get('street', ''),
-                    restaurant_address_obj.get('city', ''),
-                    restaurant_address_obj.get('state', ''),
-                    restaurant_address_obj.get('country', '')
-                ]
-                restaurant_address = ', '.join(filter(None, address_parts)).lower().strip()
-            else:
-                restaurant_address = str(restaurant_address_obj).lower().strip() if restaurant_address_obj else ''
-            
-            if (restaurant_name, restaurant_address) in blacklisted_restaurants:
-                is_blacklisted = True
-        
-        if not is_blacklisted:
-            filtered.append(restaurant)
-    
-    return filtered
-
-
-def score_restaurant(restaurant: dict, parsed_input: dict) -> tuple[float, str]:
+def score_restaurant(
+    restaurant: dict,
+    parsed_input: dict,
+) -> tuple[float, str]:
     """Score a restaurant based on parsed input criteria
     Returns tuple of (score, reasoning)"""
     score = 0.0
@@ -162,19 +118,48 @@ def score_restaurant(restaurant: dict, parsed_input: dict) -> tuple[float, str]:
 
     # Location match
     address_obj = restaurant.get("address_obj", {})
-    city = address_obj.get("city", "") if isinstance(address_obj, dict) else ""
-    if city and parsed_input.get("location_preference", "").lower() in city.lower():
+    city = ""
+    if isinstance(address_obj, dict):
+        city = address_obj.get("city", "")
+    location_pref = parsed_input.get("location_preference", "")
+    if city and location_pref.lower() in city.lower():
         score += 2.0
-        reasons.append(f"Location matches {parsed_input['location_preference']}")
-    
-    # Cuisine match
+        reasons.append(f"Location matches {location_pref}")
+
+    # Cuisine match via embeddings (with keyword fallback)
     restaurant_cuisines = restaurant.get("cuisine", []) or []
     parsed_cuisines = parsed_input.get("cuisine_preferences", []) or []
-    if restaurant_cuisines and parsed_cuisines and "Any" not in parsed_cuisines:
-        matching_cuisines = set(c.lower() for c in restaurant_cuisines) & set(c.lower() for c in parsed_cuisines)
-        if matching_cuisines:
-            score += len(matching_cuisines)
-            reasons.append(f"Matches cuisines: {', '.join(matching_cuisines)}")
+    if (
+        restaurant_cuisines
+        and parsed_cuisines
+        and "Any" not in parsed_cuisines
+    ):
+        restaurant_text = ", ".join(restaurant_cuisines)
+        preference_text = ", ".join(parsed_cuisines)
+
+        rest_embedding = _text_embedding(f"restaurant:{restaurant_text}")
+        pref_embedding = _text_embedding(f"user:{preference_text}")
+        cuisine_similarity = _cosine_similarity(rest_embedding, pref_embedding)
+
+        if cuisine_similarity > 0:
+            # Weight similarity to keep overall score within a comparable range
+            score += cuisine_similarity * 3.0
+            reasons.append(
+                "Cuisine similarity "
+                f"{cuisine_similarity:.2f} for preferences {preference_text}"
+            )
+        else:
+            # Fallback to keyword overlap
+            matching_cuisines = (
+                set(c.lower() for c in restaurant_cuisines)
+                & set(c.lower() for c in parsed_cuisines)
+            )
+            if matching_cuisines:
+                score += len(matching_cuisines)
+                reasons.append(
+                    "Matches cuisines: "
+                    f"{', '.join(matching_cuisines)}"
+                )
 
     # Budget match (using price_level as proxy)
     price_levels = {"$": 25, "$$": 50, "$$$": 100, "$$$$": 200}
@@ -183,14 +168,17 @@ def score_restaurant(restaurant: dict, parsed_input: dict) -> tuple[float, str]:
     budget_max = parsed_input.get("budget_max", 1000)
     if budget_min <= rest_price <= budget_max:
         score += 1.5
-        reasons.append(f"Price level {restaurant.get('price_level', '$$')} within budget range")
+        reasons.append(
+            "Price level "
+            f"{restaurant.get('price_level', '$$')} within budget range"
+        )
 
     # Rating bonus
     rating = restaurant.get("rating", 0.0)
     if rating > 0:
         score += rating / 2  # Convert 5-star rating to 2.5 max bonus
         reasons.append(f"Rating bonus: {rating}/5 stars")
-    
+
     # Size accommodation
     # Assuming restaurants can handle groups up to 20 by default
     attendee_count = parsed_input.get("attendee_count", 0)
@@ -204,4 +192,3 @@ def score_restaurant(restaurant: dict, parsed_input: dict) -> tuple[float, str]:
 
     reasoning = " | ".join(reasons)
     return score, reasoning
-

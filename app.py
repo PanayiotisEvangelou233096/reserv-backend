@@ -14,6 +14,7 @@ from routes.ai_agent_routes import ai_agent_bp
 from routes.booking_routes import booking_bp
 from routes.review_routes import review_bp
 from routes.outbound_call_routes import outbound_call_bp
+from routes.restaurant_routes import restaurant_bp
 import logging
 import os
 
@@ -57,6 +58,7 @@ def create_app():
     app.register_blueprint(booking_bp, url_prefix='/api')
     app.register_blueprint(review_bp, url_prefix='/api')
     app.register_blueprint(outbound_call_bp, url_prefix='/api')
+    app.register_blueprint(restaurant_bp, url_prefix='/api/restaurants')
     
     # Health check endpoint
     @app.route('/api/health', methods=['GET'])
@@ -86,4 +88,3 @@ if __name__ == '__main__':
     app = create_app()
     port = int(os.environ.get('PORT', 5000))
     app.run(debug=False, host='0.0.0.0', port=port)
-

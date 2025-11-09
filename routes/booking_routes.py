@@ -85,6 +85,35 @@ def book_restaurant(event_id):
             restaurant_phone = Config.DEBUG_PHONE_NUMBER
             logger.info(f"Using debug phone number: {restaurant_phone}")
 
+        # Get location_id from restaurant - need to look it up from Firestore
+        location_id = None
+        try:
+            # Try to get location_id from the recommendation if it's stored
+            # Otherwise, look it up by restaurant name and address
+            if 'location_id' in selected_restaurant:
+                location_id = selected_restaurant['location_id']
+            else:
+                # Look up restaurant by name and address to get location_id
+                all_restaurants = firebase_service.get_all_restaurants()
+                for rest in all_restaurants:
+                    rest_address = rest.get('address_obj', {})
+                    if isinstance(rest_address, dict):
+                        rest_address_str = ', '.join([
+                            rest_address.get('street', ''),
+                            rest_address.get('city', ''),
+                            rest_address.get('state', ''),
+                            rest_address.get('country', '')
+                        ]).strip(', ')
+                    else:
+                        rest_address_str = str(rest_address) if rest_address else ''
+                    
+                    if (rest.get('name') == selected_restaurant['restaurant_name'] and
+                        rest_address_str == restaurant_address):
+                        location_id = rest.get('location_id')
+                        break
+        except Exception as e:
+            logger.warning(f"Could not find location_id for restaurant: {str(e)}")
+        
         # Create booking record
         booking_data = {
             'event_id': event_id,
@@ -93,6 +122,7 @@ def book_restaurant(event_id):
             'restaurant_address': restaurant_address,
             'restaurant_phone': restaurant_phone,
             'restaurant_cuisine_type': selected_restaurant.get('cuisine_type', ''),
+            'location_id': location_id,
             'booking_date': event['preferred_date'],
             'booking_time': data.get('booking_time', event.get('preferred_time_slots', [None])[0]),
             'party_size': party_size,

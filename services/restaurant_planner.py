@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from datetime import datetime
 
 from .models import ParsedInput, Restaurant, RestaurantRecommendation
-from .utils import get_llm, get_restaurants_from_firestore, score_restaurant, filter_blacklisted_restaurants
+from .utils import get_llm, get_restaurants_from_firestore, score_restaurant
 
 
 class RestaurantPlannerState(TypedDict):
@@ -23,7 +23,6 @@ class RestaurantPlannerState(TypedDict):
     top_recommendations: List[RestaurantRecommendation]
     current_attempt: int
     messages: List[str]
-    dislikes: Optional[List[dict]]  # Blacklisted restaurants
 
 
 def parse_input(state: RestaurantPlannerState) -> RestaurantPlannerState:
@@ -75,17 +74,7 @@ def parse_input(state: RestaurantPlannerState) -> RestaurantPlannerState:
 def discover_restaurants(state: RestaurantPlannerState) -> RestaurantPlannerState:
     """Discover and rank restaurants based on parsed criteria"""
     # Get all restaurants from Firestore
-    all_restaurants = get_restaurants_from_firestore()
-    
-    # Filter out blacklisted restaurants BEFORE scoring
-    dislikes = state.get("dislikes", [])
-    restaurants = filter_blacklisted_restaurants(all_restaurants, dislikes)
-    
-    filtered_count = len(all_restaurants) - len(restaurants)
-    if filtered_count > 0:
-        filter_message = f"Filtered out {filtered_count} blacklisted restaurant(s)"
-    else:
-        filter_message = None
+    restaurants = get_restaurants_from_firestore()
     
     # Score and rank restaurants
     scored_restaurants = []
@@ -107,16 +96,13 @@ def discover_restaurants(state: RestaurantPlannerState) -> RestaurantPlannerStat
         for score, rest, reasoning in top_5
     ]
     
-    messages = state.get("messages", [])
-    if filter_message:
-        messages.append(filter_message)
-    messages.append(f"Found {len(restaurants)} restaurants, selected top 5 matches")
-    
     return {
         **state,
         "restaurant_candidates": restaurants,
         "top_recommendations": recommendations,
-        "messages": messages
+        "messages": state.get("messages", []) + [
+            f"Found {len(restaurants)} restaurants, selected top 5 matches"
+        ]
     }
 
 

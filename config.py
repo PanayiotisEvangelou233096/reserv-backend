@@ -31,3 +31,8 @@ class Config:
     DEBUG_PHONE_NUMBER = os.getenv('DEBUG_PHONE_NUMBER', '+32 483 71 58 62')
     USE_DEBUG_PHONE = os.getenv('USE_DEBUG_PHONE', 'True').lower() == 'true'
 
+    # ElevenLabs settings
+    ELEVENLABS_API_KEY = os.getenv('ELEVENLABS_API_KEY', '')
+    ELEVENLABS_AGENT_ID = os.getenv('ELEVENLABS_AGENT_ID', '')
+    ELEVENLABS_PHONE_NUMBER_ID = os.getenv('ELEVENLABS_PHONE_NUMBER_ID', '')
+

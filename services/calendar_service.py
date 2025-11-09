@@ -3,12 +3,12 @@ Calendar Service - Google Calendar Integration
 """
 import logging
 from datetime import datetime, timedelta
-import os
-import json
+import os.path
 from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +231,6 @@ class CalendarService:
             # Build Google Calendar URL
             title = f"Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}"
             
-            # ✅ FIX: Move newline outside f-string - use URL-encoded newline
             party_size = booking.get('party_size', 2)
             restaurant_name = booking.get('restaurant_name', '')
             restaurant_address = booking.get('restaurant_address', '')
@@ -253,4 +252,6 @@ class CalendarService:
         except Exception as e:
             logger.error(f"Error generating Google Calendar link: {str(e)}")
             raise
+
+
 

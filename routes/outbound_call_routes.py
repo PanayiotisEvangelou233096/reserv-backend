@@ -1,12 +1,37 @@
 """
 Outbound Call Routes - API endpoints for automated restaurant calls
 """
-from flask import Blueprint, request, jsonify, current_app
-from services.outbound_call_service import OutboundCallService
 import logging
+import os
+from typing import Any, Dict, List
+
+from flask import Blueprint, request, jsonify, current_app
+
+from services.outbound_call_service import OutboundCallService
 
 logger = logging.getLogger(__name__)
 outbound_call_bp = Blueprint('outbound_calls', __name__)
+
+
+def _inject_call_credentials(payload: Dict[str, Any]) -> None:
+    credentials = {
+        "elevenlabs_api_key": os.getenv("ELEVENLABS_API_KEY"),
+        "elevenlabs_agent_id": os.getenv("ELEVENLABS_AGENT_ID"),
+        "elevenlabs_phone_number_id": os.getenv("ELEVENLABS_PHONE_NUMBER_ID"),
+        "twilio_account_sid": os.getenv("TWILIO_ACCOUNT_SID"),
+        "twilio_auth_token": os.getenv("TWILIO_AUTH_TOKEN"),
+        "twilio_sms_from": os.getenv("TWILIO_SMS_FROM"),
+        "twilio_messaging_service_sid": os.getenv("TWILIO_MESSAGING_SERVICE_SID"),
+    }
+
+    for key, value in credentials.items():
+        if value and key not in payload:
+            payload[key] = value
+
+    sms_from = credentials.get("twilio_sms_from")
+    if sms_from:
+        payload.setdefault("notification_from_number", sms_from)
+        payload.setdefault("from_number", sms_from)
 
 
 @outbound_call_bp.route('/events/<event_id>/call-restaurants', methods=['POST'])
@@ -56,6 +81,14 @@ def call_restaurants_for_event(event_id):
 
         # Get max calls
         max_calls = data.get('max_calls', 3)
+        candidate_restaurants: List[Dict[str, Any]] = (
+            recommendations[:max_calls]
+            if isinstance(max_calls, int)
+            else recommendations
+        )
+        booking_details.setdefault('candidate_restaurants', candidate_restaurants)
+        booking_details.setdefault('restaurants', candidate_restaurants)
+        _inject_call_credentials(booking_details)
 
         # Make calls to top restaurants
         logger.info(f"Calling top {max_calls} restaurants for event {event_id}")
@@ -160,6 +193,9 @@ def call_specific_restaurant(event_id):
         booking_details.setdefault('party_size', party_size)
         booking_details.setdefault('booking_date', event.get('preferred_date'))
         booking_details.setdefault('booking_time', event.get('preferred_time_slots', ['19:00'])[0])
+        booking_details.setdefault('candidate_restaurants', [restaurant])
+        booking_details.setdefault('restaurants', [restaurant])
+        _inject_call_credentials(booking_details)
 
         # Prepare call data
         call_data = call_service.prepare_call_data_from_booking(
@@ -167,6 +203,11 @@ def call_specific_restaurant(event_id):
             event,
             booking_details
         )
+        _inject_call_credentials(call_data)
+        if booking_details.get('candidate_restaurants'):
+            call_data.setdefault('candidate_restaurants', booking_details['candidate_restaurants'])
+        if booking_details.get('restaurants'):
+            call_data.setdefault('restaurants', booking_details['restaurants'])
 
         # Make the call
         result = call_service.make_reservation_call(call_data)
