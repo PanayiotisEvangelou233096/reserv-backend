@@ -1,8 +1,7 @@
 """
 AI Agent Routes - Restaurant Recommendations
 """
-from flask import Blueprint, request, jsonify
-from firebase_service import FirebaseService
+from flask import Blueprint, request, jsonify, current_app
 from services.ai_agent import AIAgentService
 import logging
 
@@ -13,8 +12,8 @@ ai_agent_bp = Blueprint('ai_agent', __name__)
 def generate_recommendations(event_id):
     """Trigger AI restaurant selection"""
     try:
-        firebase_service = FirebaseService()
-        ai_service = AIAgentService()
+        firebase_service = current_app.get_firebase_service()
+        ai_service = AIAgentService(firebase_service)
         
         # Check if event exists
         event = firebase_service.get_event(event_id)
@@ -77,7 +76,7 @@ def generate_recommendations(event_id):
 def get_recommendations(event_id):
     """Retrieve recommendations for an event"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if event exists
         event = firebase_service.get_event(event_id)

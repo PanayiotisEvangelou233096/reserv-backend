@@ -1,8 +1,7 @@
 """
 Post-Event Review Routes
 """
-from flask import Blueprint, request, jsonify
-from firebase_service import FirebaseService
+from flask import Blueprint, request, jsonify, current_app
 from firebase_admin import firestore
 import logging
 
@@ -13,7 +12,7 @@ review_bp = Blueprint('reviews', __name__)
 def request_reviews(event_id):
     """Trigger review notifications"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if event exists
         event = firebase_service.get_event(event_id)
@@ -87,7 +86,7 @@ def submit_review(event_id):
         if not isinstance(overall_rating, (int, float)) or overall_rating < 1 or overall_rating > 5:
             return jsonify({'error': 'overall_rating must be between 1 and 5'}), 400
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if event exists
         event = firebase_service.get_event(event_id)
@@ -165,7 +164,7 @@ def submit_review(event_id):
 def get_event_reviews(event_id):
     """Get all reviews for an event"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if event exists
         event = firebase_service.get_event(event_id)
@@ -192,7 +191,7 @@ def get_restaurant_reviews(restaurant_name):
         if not restaurant_address:
             return jsonify({'error': 'restaurant address is required as query parameter'}), 400
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         reviews = firebase_service.get_restaurant_reviews(restaurant_name, restaurant_address)
         
         return jsonify({
@@ -214,7 +213,7 @@ def get_aggregate_rating(restaurant_name):
         if not restaurant_address:
             return jsonify({'error': 'restaurant address is required as query parameter'}), 400
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         aggregate = firebase_service.get_aggregate_rating(restaurant_name, restaurant_address)
         
         if not aggregate:

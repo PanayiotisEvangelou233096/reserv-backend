@@ -1,10 +1,10 @@
 """
 Booking Routes
 """
-from flask import Blueprint, request, jsonify, Response
-from firebase_service import FirebaseService
+from flask import Blueprint, request, jsonify, Response, current_app
 from services.booking_service import BookingService
 from services.calendar_service import CalendarService
+from config import Config
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ def book_restaurant(event_id):
         if 'recommendation_rank' not in data:
             return jsonify({'error': 'recommendation_rank is required'}), 400
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         booking_service = BookingService()
         
         # Check if event exists
@@ -64,13 +64,34 @@ def book_restaurant(event_id):
                 'restaurant': selected_restaurant
             }), 400
         
+        # Format address if it's an object
+        restaurant_address = selected_restaurant.get('address', '')
+        if isinstance(restaurant_address, dict):
+            # Convert address object to string
+            parts = []
+            if restaurant_address.get('street'):
+                parts.append(restaurant_address['street'])
+            if restaurant_address.get('city'):
+                parts.append(restaurant_address['city'])
+            if restaurant_address.get('state'):
+                parts.append(restaurant_address['state'])
+            if restaurant_address.get('country'):
+                parts.append(restaurant_address['country'])
+            restaurant_address = ', '.join(parts) if parts else 'Address not available'
+
+        # Get the phone number (use debug phone if enabled)
+        restaurant_phone = selected_restaurant.get('phone', '')
+        if Config.USE_DEBUG_PHONE:
+            restaurant_phone = Config.DEBUG_PHONE_NUMBER
+            logger.info(f"Using debug phone number: {restaurant_phone}")
+
         # Create booking record
         booking_data = {
             'event_id': event_id,
             'recommendation_id': recommendations_doc.get('id'),
             'restaurant_name': selected_restaurant['restaurant_name'],
-            'restaurant_address': selected_restaurant['address'],
-            'restaurant_phone': selected_restaurant.get('phone', ''),
+            'restaurant_address': restaurant_address,
+            'restaurant_phone': restaurant_phone,
             'restaurant_cuisine_type': selected_restaurant.get('cuisine_type', ''),
             'booking_date': event['preferred_date'],
             'booking_time': data.get('booking_time', event.get('preferred_time_slots', [None])[0]),
@@ -150,7 +171,7 @@ def book_restaurant(event_id):
 def get_booking(booking_id):
     """Retrieve booking details"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         booking = firebase_service.get_booking(booking_id)
         
         if not booking:
@@ -167,7 +188,7 @@ def get_booking(booking_id):
 def get_event_booking(event_id):
     """Retrieve the latest booking for an event"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         booking = firebase_service.get_event_booking(event_id)
 
         # Return booking or null if none
@@ -181,7 +202,7 @@ def get_event_booking(event_id):
 def get_booking_ical(booking_id):
     """Get iCal file for booking"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         calendar_service = CalendarService()
         
         # Get booking details
@@ -207,7 +228,7 @@ def get_booking_ical(booking_id):
 def complete_booking(booking_id):
     """Mark booking as completed"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if booking exists
         booking = firebase_service.get_booking(booking_id)

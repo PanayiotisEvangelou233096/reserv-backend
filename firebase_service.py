@@ -408,3 +408,58 @@ class FirebaseService:
             logs.append(log)
         return logs
 
+    # ==================== OUTBOUND CALL RECORDS ====================
+
+    def create_call_record(self, call_data):
+        """Create a call record for tracking restaurant outbound calls"""
+        doc_ref = self.db.collection('outbound_calls').document()
+        call_id = doc_ref.id
+        call_data['id'] = call_id
+        call_data['created_at'] = firestore.SERVER_TIMESTAMP
+        call_data['updated_at'] = firestore.SERVER_TIMESTAMP
+        doc_ref.set(call_data)
+        call = doc_ref.get().to_dict()
+        call['id'] = call_id
+        return call
+
+    def get_call_record(self, call_id):
+        """Get call record by ID"""
+        doc = self.db.collection('outbound_calls').document(call_id).get()
+        if doc.exists:
+            call = doc.to_dict()
+            call['id'] = doc.id
+            return call
+        return None
+
+    def update_call_record(self, call_id, update_data):
+        """Update call record with outcome"""
+        doc_ref = self.db.collection('outbound_calls').document(call_id)
+        update_data['updated_at'] = firestore.SERVER_TIMESTAMP
+        doc_ref.update(update_data)
+        updated_doc = doc_ref.get()
+        if updated_doc.exists:
+            call = updated_doc.to_dict()
+            call['id'] = call_id
+            return call
+        return None
+
+    def get_event_calls(self, event_id):
+        """Get all call records for an event"""
+        calls = []
+        docs = self.db.collection('outbound_calls').where('event_id', '==', event_id).order_by('created_at', direction=firestore.Query.DESCENDING).stream()
+        for doc in docs:
+            call = doc.to_dict()
+            call['id'] = doc.id
+            calls.append(call)
+        return calls
+
+    def get_successful_calls(self, event_id):
+        """Get all successful calls (reservation accepted) for an event"""
+        calls = []
+        docs = self.db.collection('outbound_calls').where('event_id', '==', event_id).where('reservation_accepted', '==', True).stream()
+        for doc in docs:
+            call = doc.to_dict()
+            call['id'] = doc.id
+            calls.append(call)
+        return calls
+

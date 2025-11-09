@@ -3,7 +3,8 @@ Calendar Service - Google Calendar Integration
 """
 import logging
 from datetime import datetime, timedelta
-import os.path
+import os
+import json
 from google.oauth2.credentials import Credentials
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -18,16 +19,64 @@ class CalendarService:
     
     def __init__(self):
         try:
-            # Use service account credentials from the JSON file
-            credentials_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-credentials.json')
-            credentials = service_account.Credentials.from_service_account_file(
-                credentials_path, scopes=SCOPES
-            )
+            # Try to get credentials from environment variable first (for Railway/production)
+            firebase_creds_json_str = os.environ.get('FIREBASE_CREDENTIALS_JSON')
+            
+            if firebase_creds_json_str:
+                logger.info("Loading Google Calendar credentials from environment variable")
+                # Parse the JSON string and create credentials
+                creds_dict = json.loads(firebase_creds_json_str)
+                credentials = service_account.Credentials.from_service_account_info(
+                    creds_dict, scopes=SCOPES
+                )
+            else:
+                # Fallback to file (for local development)
+                credentials_path = os.path.join(os.path.dirname(__file__), '..', 'firebase-credentials.json')
+                logger.info(f"Loading Google Calendar credentials from file: {credentials_path}")
+                credentials = service_account.Credentials.from_service_account_file(
+                    credentials_path, scopes=SCOPES
+                )
+            
             self.service = build('calendar', 'v3', credentials=credentials)
             logger.info("Successfully initialized Google Calendar service")
         except Exception as e:
             logger.error(f"Error initializing Google Calendar service: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             self.service = None
+    
+    def _parse_booking_datetime(self, booking_date, booking_time):
+        """
+        Parse booking date and time into datetime objects
+        
+        Args:
+            booking_date: Booking date (dict with 'seconds' or ISO string)
+            booking_time: Booking time string (HH:MM or HH:MM-HH:MM)
+        
+        Returns:
+            Tuple of (start_datetime, end_datetime)
+        """
+        # Parse booking date
+        if isinstance(booking_date, dict):
+            # Firestore timestamp
+            start_datetime = datetime.fromtimestamp(booking_date.get('seconds', 0))
+        else:
+            start_datetime = datetime.fromisoformat(str(booking_date))
+        
+        # Parse time (support "HH:MM" and ranges like "HH:MM-HH:MM")
+        time_str = str(booking_time)
+        if '-' in time_str:
+            # Handle time range format (e.g., "15:00-18:00")
+            time_str = time_str.split('-')[0].strip()
+        
+        time_parts = time_str.split(':')
+        hour = int(time_parts[0])
+        minute = int(time_parts[1]) if len(time_parts) > 1 and time_parts[1].isdigit() else 0
+        
+        start_datetime = start_datetime.replace(hour=hour, minute=minute)
+        end_datetime = start_datetime + timedelta(hours=2)
+        
+        return start_datetime, end_datetime
     
     def send_calendar_invites(self, booking, attendees):
         """
@@ -49,24 +98,7 @@ class CalendarService:
             # Parse booking date and time
             booking_date = booking.get('booking_date')
             booking_time = booking.get('booking_time', '19:00')
-
-            # Create datetime objects
-            if isinstance(booking_date, dict):
-                # Firestore timestamp
-                start_datetime = datetime.fromtimestamp(booking_date.get('seconds', 0))
-            else:
-                start_datetime = datetime.fromisoformat(str(booking_date))
-
-            # Parse time
-            time_str = str(booking_time)
-            if '-' in time_str:
-                time_str = time_str.split('-')[0].strip()
-            time_parts = time_str.split(':')
-            hour = int(time_parts[0])
-            minute = int(time_parts[1]) if len(time_parts) > 1 and time_parts[1].isdigit() else 0
-
-            start_datetime = start_datetime.replace(hour=hour, minute=minute)
-            end_datetime = start_datetime + timedelta(hours=2)
+            start_datetime, end_datetime = self._parse_booking_datetime(booking_date, booking_time)
             
             # Create event body (without attendees)
             event = {
@@ -137,42 +169,7 @@ class CalendarService:
             # Parse booking date and time
             booking_date = booking.get('booking_date')
             booking_time = booking.get('booking_time', '19:00')
-
-            # Create datetime objects
-            if isinstance(booking_date, dict):
-                # Firestore timestamp
-                start_datetime = datetime.fromtimestamp(booking_date.get('seconds', 0))
-            else:
-                start_datetime = datetime.fromisoformat(str(booking_date))
-
-            # Parse time robustly (support "HH:MM" and ranges like "HH:MM-HH:MM")
-            time_str = str(booking_time)
-            end_hour = None
-
-            if '-' in time_str:
-                # Handle time range format (e.g., "15:00-18:00")
-                start_time, end_time = time_str.split('-')
-                start_time = start_time.strip()
-                end_time = end_time.strip()
-                
-                # Parse start time
-                start_parts = start_time.split(':')
-                hour = int(start_parts[0])
-                minute = int(start_parts[1]) if len(start_parts) > 1 and start_parts[1].isdigit() else 0
-                
-                # Parse end time
-                end_parts = end_time.split(':')
-                end_hour = int(end_parts[0])
-                
-            else:
-                # Handle single time format (e.g., "18:00" or "18")
-                time_parts = time_str.split(':')
-                hour = int(time_parts[0])
-                minute = int(time_parts[1]) if len(time_parts) > 1 and time_parts[1].isdigit() else 0
-
-
-            start_datetime = start_datetime.replace(hour=hour, minute=minute)
-            end_datetime = start_datetime + timedelta(hours=2)  # 2 hour duration
+            start_datetime, end_datetime = self._parse_booking_datetime(booking_date, booking_time)
             
             # Format for iCal (UTC)
             start_ical = start_datetime.strftime("%Y%m%dT%H%M%SZ")
@@ -215,29 +212,17 @@ END:VCALENDAR"""
             # Parse booking date and time
             booking_date = booking.get('booking_date')
             booking_time = booking.get('booking_time', '19:00')
-
-            # Create datetime objects
-            if isinstance(booking_date, dict):
-                # Firestore timestamp
-                start_datetime = datetime.fromtimestamp(booking_date.get('seconds', 0))
-            else:
-                start_datetime = datetime.fromisoformat(str(booking_date))
-
-            # Parse time robustly (support "HH:MM" and ranges like "HH:MM-HH:MM")
             try:
-                time_str = str(booking_time)
-                if '-' in time_str:
-                    # take the start time before the dash
-                    time_str = time_str.split('-')[0].strip()
-                time_parts = time_str.split(':')
-                hour = int(time_parts[0])
-                minute = int(time_parts[1]) if len(time_parts) > 1 and time_parts[1].isdigit() else 0
+                start_datetime, end_datetime = self._parse_booking_datetime(booking_date, booking_time)
             except Exception:
                 logger.warning(f"Unable to parse booking_time '{booking_time}', defaulting to 19:00")
-                hour, minute = 19, 0
-
-            start_datetime = start_datetime.replace(hour=hour, minute=minute)
-            end_datetime = start_datetime + timedelta(hours=2)  # 2 hour duration
+                # Fallback parsing
+                if isinstance(booking_date, dict):
+                    start_datetime = datetime.fromtimestamp(booking_date.get('seconds', 0))
+                else:
+                    start_datetime = datetime.fromisoformat(str(booking_date))
+                start_datetime = start_datetime.replace(hour=19, minute=0)
+                end_datetime = start_datetime + timedelta(hours=2)
             
             # Format for Google Calendar URL
             start_google = start_datetime.strftime("%Y%m%dT%H%M%SZ")
@@ -245,21 +230,14 @@ END:VCALENDAR"""
             
             # Build Google Calendar URL
             title = f"Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}"
-            
-            # Fix: Move newline outside f-string
-            newline = '%0A'
-            party_size = booking.get('party_size', 2)
-            restaurant_name = booking.get('restaurant_name', '')
-            restaurant_address = booking.get('restaurant_address', '')
-            details = f"Reservation for {party_size} guests{newline}Restaurant: {restaurant_name}{newline}Address: {restaurant_address}"
-            
+            details = f"Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}"
             location = booking.get('restaurant_address', '')
             
             google_cal_url = (
                 f"https://calendar.google.com/calendar/render?action=TEMPLATE"
                 f"&text={title.replace(' ', '+')}"
                 f"&dates={start_google}/{end_google}"
-                f"&details={details.replace(' ', '+')}"
+                f"&details={details.replace(' ', '+').replace('\\n', '%0A')}"
                 f"&location={location.replace(' ', '+')}"
             )
             

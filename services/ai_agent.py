@@ -1,9 +1,8 @@
 """
 AI Agent Service - Restaurant Recommendations
-Uses Langchain to generate restaurant recommendations based on group preferences
+Uses agentic-ai workflow to generate restaurant recommendations based on group preferences
 """
-from firebase_service import FirebaseService
-from langchain_integration import LangchainService
+from agentic_ai.restaurant_planner import app as restaurant_planner
 import logging
 import json
 
@@ -12,296 +11,120 @@ logger = logging.getLogger(__name__)
 class AIAgentService:
     """Service for AI-powered restaurant recommendations"""
     
-    def __init__(self):
-        self.langchain_service = LangchainService()
-        self.firebase_service = FirebaseService()
+    def __init__(self, firebase_service):
+        self.firebase_service = firebase_service
     
     def generate_recommendations(self, event, attendee_preferences, dislikes):
         """
-        Generate restaurant recommendations for an event
-        
-        Args:
-            event: Event dictionary
-            attendee_preferences: List of attendee preference dictionaries
-            dislikes: List of restaurant dislike dictionaries
-        
-        Returns:
-            Dictionary with recommendations and analysis
+        Generate restaurant recommendations for an event using agentic-ai workflow and Firestore restaurant data
         """
         try:
-            # Aggregate preferences
-            all_dietary_restrictions = set()
-            alcohol_preferences = []
-            location_preferences = []
+            # Build combined input from all preferences
+            combined_prompts = []
             
-            for pref in attendee_preferences:
-                all_dietary_restrictions.update(pref.get('dietary_restrictions', []))
-                alcohol_preferences.append(pref.get('alcohol_preference', 'no-preference'))
-                if pref.get('location_override'):
-                    location_preferences.append(pref['location_override'])
+            # Add event details
+            event_prompt = f"Event Details: Location: {event.get('location', 'Amsterdam')}, "
+            event_prompt += f"Type: {event.get('occasion_description', 'Not specified')}, "
+            event_prompt += f"Date: {event.get('preferred_date', 'Not specified')}, "
+            event_prompt += f"Time: {event.get('preferred_time_slots', ['Not specified'])[0]}, "
+            event_prompt += f"Number of attendees: {len(attendee_preferences)}"
             
-            # Determine alcohol requirement
-            alcohol_required = 'alcoholic' in alcohol_preferences
-            alcohol_availability_required = alcohol_required
+            # Add budget information
+            if event.get('budget_min') and event.get('budget_max'):
+                event_prompt += f", Budget: €{event.get('budget_min')}-€{event.get('budget_max')} per person"
+            elif event.get('budget_max'):
+                event_prompt += f", Budget: Up to €{event.get('budget_max')} per person"
+            elif event.get('budget_min'):
+                event_prompt += f", Budget: From €{event.get('budget_min')} per person"
+
+            # Add cuisine preferences
+            if event.get('cuisine_preferences'):
+                event_prompt += f", Preferred cuisines: {', '.join(event.get('cuisine_preferences'))}"
+
+            # Add extra information
+            if event.get('extra_info'):
+                event_prompt += f"\nAdditional requirements: {event.get('extra_info')}"
+                
+            combined_prompts.append(event_prompt)
             
-            # Location consensus
-            location_consensus = event.get('location')
-            if location_preferences:
-                # Use most common override, or event location
-                location_consensus = location_preferences[0] if location_preferences else event.get('location')
-            
-            # Build blacklist
-            excluded_restaurants = []
-            blacklisted_restaurants = set()
-            
-            for dislike in dislikes:
-                if dislike.get('is_active', True):
-                    restaurant_key = f"{dislike['restaurant_name']}_{dislike['restaurant_address']}"
-                    blacklisted_restaurants.add(restaurant_key)
-                    excluded_restaurants.append({
-                        'restaurant_name': dislike['restaurant_name'],
-                        'restaurant_address': dislike['restaurant_address'],
-                        'excluded_by': [dislike['user_phone']],
-                        'dislike_reasons': [dislike.get('reason', 'unknown')]
-                    })
-            
-            # Use AI to generate recommendations
-            # For now, we'll use a mock implementation that can be replaced with actual restaurant API
-            recommendations = self._generate_ai_recommendations(
-                location=location_consensus,
-                dietary_restrictions=list(all_dietary_restrictions),
-                alcohol_required=alcohol_availability_required,
-                occasion=event.get('occasion_description', ''),
-                party_size=event.get('expected_attendee_count', 2),
-                blacklisted_restaurants=blacklisted_restaurants
-            )
-            
-            # Build response
-            result = {
-                'recommendations': recommendations,
-                'collective_dietary_restrictions': list(all_dietary_restrictions),
-                'alcohol_availability_required': alcohol_availability_required,
-                'location_consensus': location_consensus,
-                'excluded_restaurants': excluded_restaurants,
-                'ai_model_used': 'gpt-3.5-turbo',
-                'confidence_score': 0.85
+            # Add each attendee's preferences
+            for i, pref in enumerate(attendee_preferences, 1):
+                prompt = f"Attendee {i}: "
+                if pref.get('dietary_restrictions'):
+                    prompt += f"Dietary restrictions: {', '.join(pref['dietary_restrictions'])}. "
+                if pref.get('cuisine_preferences'):
+                    prompt += f"Preferred cuisines: {', '.join(pref['cuisine_preferences'])}. "
+                if pref.get('budget'):
+                    prompt += f"Budget: {pref['budget']}. "
+                if pref.get('event_specific_notes'):
+                    prompt += f"Notes: {pref['event_specific_notes']}."
+                combined_prompts.append(prompt)
+
+            combined_input = '\n'.join(combined_prompts)
+            print(f"COMBINED INPUT: {combined_input}")
+            # Initialize workflow state
+            initial_state = {
+                "input": combined_input,
+                "attendee_count": len(attendee_preferences),
+                "location_preference": event.get('location', 'Amsterdam'),
+                "time_preference": event.get('time', 'Evening'),
+                "date": event.get('date', 'Not specified'),
+                "budget_min": None,  # Will be parsed from input
+                "budget_max": None,  # Will be parsed from input
+                "dietary_restrictions": None,  # Will be parsed from input
+                "cuisine_preferences": [],  # Will be parsed from input
+                "restaurant_candidates": [],
+                "top_recommendations": [],
+                "current_attempt": 0,
+                "messages": []
             }
             
-            # Log AI action
-            self.firebase_service.log_ai_action({
-                'event_id': event.get('event_id'),
-                'action_type': 'recommendation_generation',
-                'input_data': {
-                    'location': location_consensus,
-                    'dietary_restrictions': list(all_dietary_restrictions),
-                    'alcohol_required': alcohol_availability_required,
-                    'occasion': event.get('occasion_description'),
-                    'party_size': event.get('expected_attendee_count')
-                },
-                'output_data': result,
-                'blacklisted_restaurants_excluded': len(excluded_restaurants),
-                'success': True
-            })
+            # Run the workflow
+            result = restaurant_planner.invoke(initial_state)
             
-            return result
+            # Format the response
+            recommendations = []
+            logger.info("=== AI Recommendation Process ===")
+            logger.info(f"Input Requirements:\n{combined_input}")
+            logger.info(f"Number of recommendations found: {len(result.get('top_recommendations', []))}")
+            
+            for index, rec in enumerate(result.get('top_recommendations', []), start=1):
+                restaurant_data = {
+                    'rank': index,
+                    'restaurant_name': rec.restaurant.name,
+                    'address': getattr(rec.restaurant, 'address_obj', {}),
+                    'phone': getattr(rec.restaurant, 'phone', ''),
+                    'rating': getattr(rec.restaurant, 'rating', 0.0),
+                    'cuisine': getattr(rec.restaurant, 'cuisine', []),
+                    'cuisine_type': ', '.join(getattr(rec.restaurant, 'cuisine', [])),
+                    'price_level': getattr(rec.restaurant, 'price_level', 'N/A'),
+                    'score': rec.score,
+                    'reasoning': rec.reasoning
+                }
+                recommendations.append(restaurant_data)
+                
+                # Log detailed reasoning for each recommendation
+                logger.info(f"\nRecommendation #{index}: {rec.restaurant.name}")
+                logger.info(f"Match Score: {rec.score:.2f}")
+                logger.info(f"Cuisine: {restaurant_data['cuisine_type']}")
+                logger.info(f"Price Level: {restaurant_data['price_level']}")
+                logger.info(f"Rating: {restaurant_data['rating']}")
+                logger.info(f"Reasoning:\n{rec.reasoning}")
+                
+            # Log overall decision process
+            logger.info("\n=== Selection Summary ===")
+            logger.info(f"Total restaurants considered: {len(result.get('restaurant_candidates', []))}")
+            logger.info(f"Messages from selection process:")
+            for msg in result.get('messages', []):
+                logger.info(f"- {msg}")
+            
+            return {
+                'recommendations': recommendations,
+                'messages': result.get('messages', [])
+            }
             
         except Exception as e:
             logger.error(f"Error generating recommendations: {str(e)}")
-            # Log error
-            self.firebase_service.log_ai_action({
-                'event_id': event.get('event_id'),
-                'action_type': 'recommendation_generation',
-                'success': False,
-                'error_message': str(e)
-            })
-            raise
-
-    def generate_recommendations_from_prompts(self, event, concatenated_prompts, dislikes):
-        """
-        Use the concatenated natural-language prompts from organizer + respondents to ask the LLM
-        for restaurant recommendations. Returns similar structure as generate_recommendations.
-        """
-        try:
-            if not self.langchain_service.llm:
-                # Fallback to basic generation using existing method
-                return self._generate_ai_recommendations(
-                    location=event.get('location'),
-                    dietary_restrictions=[],
-                    alcohol_required=False,
-                    occasion=event.get('occasion_description', ''),
-                    party_size=event.get('expected_attendee_count', 2),
-                    blacklisted_restaurants=set()
-                )
-
-            # Build LLM prompt
-            system_prompt = (
-                "You are an assistant that recommends restaurants for a group based on a collection of short prompts from the organizer and attendees."
-                " Return a JSON object with key 'recommendations' which is an array of up to 5 recommendation objects with fields:"
-                " rank (1..5), restaurant_name, address, phone, cuisine_type, reasoning."
-            )
-            human_prompt = f"Group info: {event.get('occasion_description', '')}\nLocation: {event.get('location', '')}\nPrompts and preferences:\n{concatenated_prompts}\nDislikes: {dislikes}\nPlease return JSON as described."
-
-            # Use our new predict method
-            text = self.langchain_service.predict(system_prompt, human_prompt)
-            if not text:
-                return self._generate_ai_recommendations(
-                    location=event.get('location'),
-                    dietary_restrictions=[],
-                    alcohol_required=False,
-                    occasion=event.get('occasion_description', ''),
-                    party_size=event.get('expected_attendee_count', 2),
-                    blacklisted_restaurants=set()
-                )
-
-            import json
-            # Try to extract JSON
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-
-            recommendations = []
-            try:
-                obj = json.loads(text)
-                recommendations = obj.get('recommendations') or obj
-            except Exception:
-                # Could not parse JSON - fallback
-                recommendations = self._generate_ai_recommendations(
-                    location=event.get('location'),
-                    dietary_restrictions=[],
-                    alcohol_required=False,
-                    occasion=event.get('occasion_description', ''),
-                    party_size=event.get('expected_attendee_count', 2),
-                    blacklisted_restaurants=set()
-                )
-
-            result = {
-                'recommendations': recommendations,
-                'ai_model_used': 'gpt-3.5-turbo',
-                'confidence_score': 0.8
-            }
-
-            # Log AI action
-            self.firebase_service.log_ai_action({
-                'event_id': event.get('event_id'),
-                'action_type': 'recommendation_generation_from_prompts',
-                'input_prompts': concatenated_prompts,
-                'output': result,
-                'success': True
-            })
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error in generate_recommendations_from_prompts: {str(e)}")
-            self.firebase_service.log_ai_action({
-                'event_id': event.get('event_id'),
-                'action_type': 'recommendation_generation_from_prompts',
-                'success': False,
-                'error_message': str(e)
-            })
-            # fallback to default
-            return self._generate_ai_recommendations(
-                location=event.get('location'),
-                dietary_restrictions=[],
-                alcohol_required=False,
-                occasion=event.get('occasion_description', ''),
-                party_size=event.get('expected_attendee_count', 2),
-                blacklisted_restaurants=set()
-            )
+            return {'error': str(e)}
     
-    def _generate_ai_recommendations(self, location, dietary_restrictions, alcohol_required, occasion, party_size, blacklisted_restaurants):
-        """
-        Generate restaurant recommendations using AI
-        
-        Note: This is a placeholder. In production, this would:
-        1. Query restaurant APIs (Yelp, Google Places, etc.)
-        2. Filter by location, dietary restrictions, alcohol availability
-        3. Exclude blacklisted restaurants
-        4. Use AI to rank and justify recommendations
-        """
-        # Use Langchain to generate recommendations if available
-        # For now, return mock recommendations that can be replaced with actual API calls
-        
-        # TODO: Integrate with restaurant APIs (Yelp, Google Places, OpenTable)
-        # TODO: Use Langchain to analyze and rank restaurants based on preferences
-        
-        # Mock restaurant data - in production, this would come from APIs
-        all_restaurants = [
-            {
-                'restaurant_name': 'The Gourmet Kitchen',
-                'address': f'{location}, Main Street 123',
-                'phone': '+1234567890',
-                'cuisine_type': 'Italian',
-                'dietary_options': ['vegetarian', 'gluten-free'],
-                'alcohol_available': True
-            },
-            {
-                'restaurant_name': 'Green Leaf Bistro',
-                'address': f'{location}, Park Avenue 456',
-                'phone': '+1234567891',
-                'cuisine_type': 'Mediterranean',
-                'dietary_options': ['vegetarian', 'vegan', 'gluten-free'],
-                'alcohol_available': True
-            },
-            {
-                'restaurant_name': 'Ocean View Seafood',
-                'address': f'{location}, Harbor Road 789',
-                'phone': '+1234567892',
-                'cuisine_type': 'Seafood',
-                'dietary_options': ['gluten-free'],
-                'alcohol_available': True
-            },
-            {
-                'restaurant_name': 'Garden Fresh',
-                'address': f'{location}, Market Square 321',
-                'phone': '+1234567893',
-                'cuisine_type': 'Vegetarian',
-                'dietary_options': ['vegetarian', 'vegan', 'gluten-free'],
-                'alcohol_available': False
-            },
-            {
-                'restaurant_name': 'Steakhouse Prime',
-                'address': f'{location}, Downtown Plaza 654',
-                'phone': '+1234567894',
-                'cuisine_type': 'Steakhouse',
-                'dietary_options': ['gluten-free'],
-                'alcohol_available': True
-            }
-        ]
-        
-        # Filter out blacklisted restaurants
-        available_restaurants = []
-        for restaurant in all_restaurants:
-            restaurant_key = f"{restaurant['restaurant_name']}_{restaurant['address']}"
-            if restaurant_key not in blacklisted_restaurants:
-                available_restaurants.append(restaurant)
-        
-        # Use AI to rank and justify recommendations
-        # For now, use simple filtering and ranking
-        # In production, use Langchain to analyze and rank
-        
-        ranked_restaurants = []
-        for i, restaurant in enumerate(available_restaurants[:5], 1):
-            # Simple ranking logic - in production, use AI
-            reasoning = f"Good match for {occasion} in {location}"
-            if dietary_restrictions:
-                reasoning += f", accommodates {', '.join(dietary_restrictions)}"
-            if alcohol_required and restaurant.get('alcohol_available'):
-                reasoning += ", alcohol available"
-            
-            ranked_restaurants.append({
-                'rank': i,
-                'restaurant_name': restaurant['restaurant_name'],
-                'address': restaurant['address'],
-                'phone': restaurant['phone'],
-                'cuisine_type': restaurant['cuisine_type'],
-                'reasoning': reasoning,
-                'accommodates_requirements': {
-                    'dietary_restrictions': [d for d in dietary_restrictions if d in restaurant.get('dietary_options', [])],
-                    'alcohol_available': restaurant.get('alcohol_available', False)
-                }
-            })
-        
-        return ranked_restaurants
 

@@ -1,8 +1,7 @@
 """
 User Management Routes
 """
-from flask import Blueprint, request, jsonify
-from firebase_service import FirebaseService
+from flask import Blueprint, request, jsonify, current_app
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ def user_onboarding():
         if alcohol_preference not in ['alcoholic', 'non-alcoholic', 'no-preference']:
             return jsonify({'error': 'alcohol_preference must be one of: alcoholic, non-alcoholic, no-preference'}), 400
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Create or update user
         user_data = {
@@ -56,7 +55,7 @@ def user_onboarding():
 def get_user(phone_number):
     """Retrieve user profile"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         user = firebase_service.get_user(phone_number)
         
         if not user:
@@ -74,7 +73,7 @@ def update_user_preferences(phone_number):
     try:
         data = request.get_json()
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if user exists
         user = firebase_service.get_user(phone_number)

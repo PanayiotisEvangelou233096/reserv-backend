@@ -27,3 +27,7 @@ class Config:
     # Frontend URL for invitation links (set in .env for dev/staging/production)
     FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', '')
 
+    # Debug settings
+    DEBUG_PHONE_NUMBER = os.getenv('DEBUG_PHONE_NUMBER', '+32 483 71 58 62')
+    USE_DEBUG_PHONE = os.getenv('USE_DEBUG_PHONE', 'True').lower() == 'true'
+

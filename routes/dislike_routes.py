@@ -1,8 +1,7 @@
 """
 Restaurant Dislike/Blacklist Routes
 """
-from flask import Blueprint, request, jsonify
-from firebase_service import FirebaseService
+from flask import Blueprint, request, jsonify, current_app
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,7 +19,7 @@ def add_dislike(phone_number):
             if field not in data:
                 return jsonify({'error': f'{field} is required'}), 400
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if user exists
         user = firebase_service.get_user(phone_number)
@@ -64,7 +63,7 @@ def add_dislike(phone_number):
 def get_user_dislikes(phone_number):
     """Get user's blacklisted restaurants"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if user exists
         user = firebase_service.get_user(phone_number)
@@ -87,7 +86,7 @@ def get_user_dislikes(phone_number):
 def remove_dislike(phone_number, dislike_id):
     """Remove restaurant from blacklist (deactivate)"""
     try:
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if user exists
         user = firebase_service.get_user(phone_number)
@@ -108,7 +107,7 @@ def update_dislike(phone_number, dislike_id):
     try:
         data = request.get_json()
         
-        firebase_service = FirebaseService()
+        firebase_service = current_app.get_firebase_service()
         
         # Check if user exists
         user = firebase_service.get_user(phone_number)
