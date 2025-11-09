@@ -245,14 +245,21 @@ END:VCALENDAR"""
             
             # Build Google Calendar URL
             title = f"Restaurant Reservation at {booking.get('restaurant_name', 'Restaurant')}"
-            details = f"Reservation for {booking.get('party_size', 2)} guests\\nRestaurant: {booking.get('restaurant_name', '')}\\nAddress: {booking.get('restaurant_address', '')}"
+            
+            # Fix: Move newline outside f-string
+            newline = '%0A'
+            party_size = booking.get('party_size', 2)
+            restaurant_name = booking.get('restaurant_name', '')
+            restaurant_address = booking.get('restaurant_address', '')
+            details = f"Reservation for {party_size} guests{newline}Restaurant: {restaurant_name}{newline}Address: {restaurant_address}"
+            
             location = booking.get('restaurant_address', '')
             
             google_cal_url = (
                 f"https://calendar.google.com/calendar/render?action=TEMPLATE"
                 f"&text={title.replace(' ', '+')}"
                 f"&dates={start_google}/{end_google}"
-                f"&details={details.replace(' ', '+').replace('\\n', '%0A')}"
+                f"&details={details.replace(' ', '+')}"
                 f"&location={location.replace(' ', '+')}"
             )
             

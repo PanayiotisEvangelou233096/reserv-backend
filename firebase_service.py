@@ -1,33 +1,40 @@
-"""
-Firebase Firestore Service - Restaurant Planner v2
-Handles all database operations according to the design document
-"""
+import os
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
-from config import Config
 import logging
-import os
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class FirebaseService:
-    """Service class for Firebase Firestore operations - Restaurant Planner v2"""
+    _instance = None
     
-    def __init__(self):
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(FirebaseService, cls).__new__(cls)
+            cls._instance._initialize()
+        return cls._instance
+    
+    def _initialize(self):
         """Initialize Firebase Admin SDK"""
         try:
-            # Check if Firebase is already initialized
+            # Try to get credentials from environment variable first (for Railway/production)
+            creds_json = os.getenv('FIREBASE_CREDENTIALS_JSON')
+            
+            if creds_json:
+                logger.info("Loading Firebase credentials from environment variable")
+                cred = credentials.Certificate(json.loads(creds_json))
+            else:
+                # Fallback to file (for local development)
+                creds_path = os.getenv('FIREBASE_CREDENTIALS_PATH', 'firebase-credentials.json')
+                logger.info(f"Loading Firebase credentials from file: {creds_path}")
+                cred = credentials.Certificate(creds_path)
+            
             if not firebase_admin._apps:
-                cred_path = Config.FIREBASE_CREDENTIALS_PATH
-                if not os.path.exists(cred_path):
-                    raise FileNotFoundError(f"Firebase credentials file not found: {cred_path}")
-                
-                cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred)
-                logger.info("Firebase initialized successfully")
             
             self.db = firestore.client()
+            logger.info("Firebase initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize Firebase: {str(e)}")
